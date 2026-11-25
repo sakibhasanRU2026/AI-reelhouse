@@ -94,3 +94,44 @@ def create_app() -> FastAPI:
         jid = store.new_id()
         jdir = store.dir(jid)
         jdir.mkdir(parents=True)
+        src, size, limit = jdir / f"input{ext}", 0, s.max_upload_mb * 1048576
+        try:
+            with open(src, "wb") as f:
+                while chunk := await video.read(1 << 20):
+                    size += len(chunk)
+                    if size > limit:
+                        raise ApiError(413, {"error": "file_too_large", "message": f"Upload exceeds {s.max_upload_mb} MB"})
+                    f.write(chunk)
+            try:
+                info = await run_in_threadpool(probe, src)
+            except MediaError as e:
+                raise ApiError(422, {"error": "invalid_video", "message": str(e)})
+            if info["duration"] > s.max_duration_s:
+                raise ApiError(422, {"error": "video_too_long", "message": f"Video is {info['duration']:.0f}s; the limit is {s.max_duration_s:.0f}s"})
+        except ApiError:
+            shutil.rmtree(jdir, ignore_errors=True)
+            raise
+        created = now_iso()
+        store.save(jid, {"job_id": jid, "status": "queued", "progress": 0, "error": None, "duration_s": None,
+                         "output_sha256": None, "created_at": created, "finished_at": None, "input": src.name})
+        worker.submit(jid, ins, src)
+        return {"job_id": jid, "status": "queued", "created_at": created}
+
+    def load(jid: str) -> dict:
+        job = store.get(jid) if JOB_ID.match(jid) else None
+        if not job:
+            raise ApiError(404, {"error": "not_found", "message": "Unknown job"})
+        return job
+
+    @app.get("/v1/render-jobs/{jid}", dependencies=[Depends(auth)])
+    def job_status(jid: str, request: Request):
+        return public(load(jid), request)
+
+    @app.get("/v1/render-jobs/{jid}/output", dependencies=[Depends(auth)])
+    def job_output(jid: str):
+        job = load(jid)
+        if job["status"] != "completed":
+            raise ApiError(409, {"error": "not_ready", "message": f"Job status is '{job['status']}'"})
+        return FileResponse(store.dir(jid) / "output.mp4", media_type="video/mp4", filename=f"{jid}.mp4")
+
+    return app
