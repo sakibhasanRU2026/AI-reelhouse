@@ -1,0 +1,693 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerified() && request.auth.token.email == 'sakibhasan.ru18@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin() ||
+        (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isAssignedClient(data) {
+      return isSignedIn() && (
+        (data.clientUid is string && data.clientUid == request.auth.uid) ||
+        (isVerified() && data.clientEmail is string && data.clientEmail.size() > 0 && data.clientEmail == request.auth.token.email)
+      );
+    }
+
+    function canAccessRecord(data) {
+      return isAdmin() ||
+        (isSignedIn() && data.ownerUid == request.auth.uid) ||
+        isAssignedClient(data);
+    }
+
+    function canListRecord(data) {
+      return isBootstrapAdmin() ||
+        (isSignedIn() && data.ownerUid == request.auth.uid) ||
+        isAssignedClient(data);
+    }
+
+    function optStr(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function reqStr(data, key, minLen, maxLen) {
+      return (key in data) && data[key] is string && data[key].size() >= minLen && data[key].size() <= maxLen;
+    }
+
+    function optList(data, key, maxItems) {
+      return !(key in data) || (data[key] is list && data[key].size() <= maxItems && (data[key].size() == 0 || data[key][0] is string));
+    }
+
+    function optMap(data, key) {
+      return !(key in data) || data[key] is map;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'photoURL', 'role', 'clientId', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        reqStr(data, 'email', 1, 320) &&
+        optStr(data, 'displayName', 120) &&
+        optStr(data, 'photoURL', 500) &&
+        optStr(data, 'clientId', 128) &&
+        (data.role == 'admin' || data.role == 'client') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidClient(data) {
+      return data.keys().hasAll(['clientId', 'ownerUid', 'name', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'clientId', 'ownerUid', 'clientUid', 'clientEmail', 'name', 'company',
+          'industry', 'niche', 'targetAudience', 'brandGuidelines', 'brandColors',
+          'preferredFonts', 'referenceLinks', 'contentPreferences', 'socialAccounts',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        reqStr(data, 'name', 1, 120) &&
+        optStr(data, 'company', 160) &&
+        optStr(data, 'industry', 120) &&
+        optStr(data, 'niche', 120) &&
+        optStr(data, 'targetAudience', 500) &&
+        optStr(data, 'brandGuidelines', 3000) &&
+        optList(data, 'brandColors', 8) &&
+        optList(data, 'preferredFonts', 6) &&
+        optList(data, 'referenceLinks', 15) &&
+        optMap(data, 'contentPreferences') &&
+        optMap(data, 'socialAccounts') &&
+        (data.status == 'active' || data.status == 'archived') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data) {
+      return data.keys().hasAll(['workspaceId', 'clientId', 'ownerUid', 'name', 'defaultAspectRatio', 'defaultResolution', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['workspaceId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail', 'name', 'defaultAspectRatio', 'defaultResolution', 'createdAt', 'updatedAt']) &&
+        isValidId(data.workspaceId) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        reqStr(data, 'name', 1, 140) &&
+        (data.defaultAspectRatio in ['9:16', '16:9', '1:1', '4:5']) &&
+        (data.defaultResolution in ['export_1080p', 'preview_720p']) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidIdea(data) {
+      return data.keys().hasAll(['ideaId', 'clientId', 'ownerUid', 'title', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'ideaId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail', 'title',
+          'hook', 'category', 'niche', 'tags', 'referenceLinks', 'notes',
+          'status', 'reviewNote', 'reviewedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ideaId) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        reqStr(data, 'title', 1, 180) &&
+        optStr(data, 'hook', 400) &&
+        optStr(data, 'category', 80) &&
+        optStr(data, 'niche', 80) &&
+        optList(data, 'tags', 10) &&
+        optList(data, 'referenceLinks', 10) &&
+        optStr(data, 'notes', 2000) &&
+        optStr(data, 'reviewNote', 1000) &&
+        optStr(data, 'reviewedBy', 320) &&
+        (data.status in ['draft', 'pending_approval', 'approved', 'rejected', 'changes_requested']) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidScript(data) {
+      return data.keys().hasAll(['scriptId', 'clientId', 'ownerUid', 'title', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'scriptId', 'ideaId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail',
+          'title', 'hook', 'talkingPoints', 'cta', 'captionText', 'estimatedDurationS',
+          'status', 'reviewNote', 'reviewedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.scriptId) &&
+        optStr(data, 'ideaId', 128) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        reqStr(data, 'title', 1, 180) &&
+        optStr(data, 'hook', 500) &&
+        optList(data, 'talkingPoints', 20) &&
+        optStr(data, 'cta', 400) &&
+        optStr(data, 'captionText', 2200) &&
+        (!('estimatedDurationS' in data) || (data.estimatedDurationS is number && data.estimatedDurationS >= 0 && data.estimatedDurationS <= 3600)) &&
+        optStr(data, 'reviewNote', 1000) &&
+        optStr(data, 'reviewedBy', 320) &&
+        (data.status in ['draft', 'pending_approval', 'approved', 'rejected', 'changes_requested']) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['projectId', 'title', 'clientId', 'ownerUid', 'status', 'targetAspectRatio', 'latestVersionNumber', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'projectId', 'title', 'clientId', 'ownerUid', 'clientUid', 'clientEmail',
+          'ideaId', 'scriptId', 'sourceAssetId', 'referenceAssetId', 'referenceMetrics',
+          'editingInstructions', 'targetAspectRatio', 'targetDurationS', 'captionPreferences',
+          'deadline', 'status', 'latestVersionNumber', 'latestJobId', 'approvedVersionNumber',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.projectId) &&
+        reqStr(data, 'title', 1, 180) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        optStr(data, 'ideaId', 128) &&
+        optStr(data, 'scriptId', 128) &&
+        optStr(data, 'sourceAssetId', 128) &&
+        optStr(data, 'referenceAssetId', 128) &&
+        optMap(data, 'referenceMetrics') &&
+        optMap(data, 'editingInstructions') &&
+        (data.targetAspectRatio in ['9:16', '16:9', '1:1', '4:5']) &&
+        (!('targetDurationS' in data) || (data.targetDurationS is number && data.targetDurationS >= 0 && data.targetDurationS <= 3600)) &&
+        optMap(data, 'captionPreferences') &&
+        optStr(data, 'deadline', 40) &&
+        (data.status in [
+          'Draft', 'Idea Approval', 'Script Approval', 'Awaiting Footage',
+          'Ready for Editing', 'Rendering', 'Awaiting Review', 'Revision Requested',
+          'Re-rendering', 'Final Approval', 'Ready for Publishing', 'Published', 'Failed'
+        ]) &&
+        data.latestVersionNumber is int && data.latestVersionNumber >= 0 &&
+        optStr(data, 'latestJobId', 128) &&
+        (!('approvedVersionNumber' in data) || (data.approvedVersionNumber is int && data.approvedVersionNumber >= 0)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAsset(data) {
+      return data.keys().hasAll(['assetId', 'projectId', 'clientId', 'ownerUid', 'kind', 'filename', 'storageProvider', 'available', 'createdAt']) &&
+        data.keys().hasOnly([
+          'assetId', 'projectId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail',
+          'kind', 'filename', 'mimeType', 'sizeBytes', 'durationS', 'width', 'height',
+          'storageProvider', 'available', 'expiresAt', 'referenceAnalysis', 'createdAt'
+        ]) &&
+        isValidId(data.assetId) &&
+        isValidId(data.projectId) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        (data.kind in ['source', 'reference']) &&
+        reqStr(data, 'filename', 1, 200) &&
+        optStr(data, 'mimeType', 80) &&
+        (!('sizeBytes' in data) || data.sizeBytes is number) &&
+        (!('durationS' in data) || data.durationS is number) &&
+        (!('width' in data) || data.width is number) &&
+        (!('height' in data) || data.height is number) &&
+        (data.storageProvider in ['local_temp', 'r2']) &&
+        data.available is bool &&
+        optStr(data, 'expiresAt', 64) &&
+        optMap(data, 'referenceAnalysis') &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidRenderJob(data) {
+      return data.keys().hasAll(['jobId', 'ownerUid', 'status', 'progress', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'jobId', 'projectId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail',
+          'versionNumber', 'status', 'progress', 'error', 'durationS', 'resolutionPreset',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.jobId) &&
+        optStr(data, 'projectId', 128) &&
+        optStr(data, 'clientId', 128) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        (!('versionNumber' in data) || (data.versionNumber is int && data.versionNumber >= 1)) &&
+        (data.status in ['queued', 'rendering', 'completed', 'failed']) &&
+        data.progress is number && data.progress >= 0 && data.progress <= 100 &&
+        optStr(data, 'error', 1000) &&
+        (!('durationS' in data) || data.durationS is number) &&
+        (!('resolutionPreset' in data) || (data.resolutionPreset in ['export_1080p', 'preview_720p'])) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidVideoVersion(data) {
+      return data.keys().hasAll(['versionId', 'projectId', 'clientId', 'ownerUid', 'versionNumber', 'jobId', 'approvalStatus', 'outputAvailable', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'versionId', 'projectId', 'clientId', 'ownerUid', 'clientUid', 'clientEmail',
+          'versionNumber', 'jobId', 'instructions', 'revisionNotes', 'approvalStatus',
+          'outputAvailable', 'durationS', 'aspectRatio', 'resolutionPreset', 'approvedBy',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.versionId) &&
+        isValidId(data.projectId) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        data.versionNumber is int && data.versionNumber >= 1 &&
+        isValidId(data.jobId) &&
+        optMap(data, 'instructions') &&
+        optStr(data, 'revisionNotes', 1000) &&
+        (data.approvalStatus in ['pending_review', 'approved', 'rejected', 'revision_requested']) &&
+        data.outputAvailable is bool &&
+        (!('durationS' in data) || data.durationS is number) &&
+        (!('aspectRatio' in data) || (data.aspectRatio in ['9:16', '16:9', '1:1', '4:5'])) &&
+        (!('resolutionPreset' in data) || (data.resolutionPreset in ['export_1080p', 'preview_720p'])) &&
+        optStr(data, 'approvedBy', 320) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFeedback(data) {
+      return data.keys().hasAll(['feedbackId', 'projectId', 'versionId', 'clientId', 'ownerUid', 'authorUid', 'comment', 'status', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'feedbackId', 'projectId', 'versionId', 'versionNumber', 'clientId',
+          'ownerUid', 'clientUid', 'clientEmail', 'authorUid', 'authorEmail',
+          'timestampS', 'comment', 'matchedRules', 'clarificationNeeded',
+          'triggeredRevisionJobId', 'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.feedbackId) &&
+        isValidId(data.projectId) &&
+        isValidId(data.versionId) &&
+        (!('versionNumber' in data) || (data.versionNumber is int && data.versionNumber >= 1)) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        isValidId(data.authorUid) &&
+        optStr(data, 'authorEmail', 320) &&
+        (!('timestampS' in data) || (data.timestampS is number && data.timestampS >= 0 && data.timestampS <= 86400)) &&
+        reqStr(data, 'comment', 1, 2000) &&
+        optList(data, 'matchedRules', 20) &&
+        (!('clarificationNeeded' in data) || data.clarificationNeeded is bool) &&
+        optStr(data, 'triggeredRevisionJobId', 128) &&
+        (data.status in ['open', 'applied', 'needs_clarification', 'resolved']) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidApproval(data) {
+      return data.keys().hasAll(['approvalId', 'targetType', 'targetId', 'clientId', 'ownerUid', 'decision', 'decidedByUid', 'createdAt']) &&
+        data.keys().hasOnly([
+          'approvalId', 'targetType', 'targetId', 'projectId', 'clientId',
+          'ownerUid', 'clientUid', 'clientEmail', 'versionNumber', 'decision',
+          'note', 'decidedByUid', 'decidedByEmail', 'createdAt'
+        ]) &&
+        isValidId(data.approvalId) &&
+        (data.targetType in ['idea', 'script', 'video_version']) &&
+        isValidId(data.targetId) &&
+        optStr(data, 'projectId', 128) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        (!('versionNumber' in data) || (data.versionNumber is int && data.versionNumber >= 1)) &&
+        (data.decision in ['approved', 'rejected', 'revision_requested']) &&
+        optStr(data, 'note', 1000) &&
+        isValidId(data.decidedByUid) &&
+        optStr(data, 'decidedByEmail', 320) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidPublishingRecord(data) {
+      return data.keys().hasAll(['recordId', 'projectId', 'versionId', 'clientId', 'ownerUid', 'title', 'platform', 'plannedDate', 'readiness', 'integrationStatus', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'recordId', 'projectId', 'versionId', 'versionNumber', 'clientId',
+          'ownerUid', 'clientUid', 'clientEmail', 'title', 'platform', 'caption',
+          'hashtags', 'templateName', 'plannedDate', 'readiness', 'integrationStatus',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.recordId) &&
+        isValidId(data.projectId) &&
+        isValidId(data.versionId) &&
+        (!('versionNumber' in data) || (data.versionNumber is int && data.versionNumber >= 1)) &&
+        isValidId(data.clientId) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        reqStr(data, 'title', 1, 180) &&
+        (data.platform in ['instagram', 'tiktok']) &&
+        optStr(data, 'caption', 2200) &&
+        optList(data, 'hashtags', 30) &&
+        optStr(data, 'templateName', 80) &&
+        reqStr(data, 'plannedDate', 4, 20) &&
+        (data.readiness in ['draft', 'ready', 'scheduled', 'not_connected', 'published']) &&
+        (data.integrationStatus in ['not_connected', 'connected']) &&
+        (data.readiness != 'published' || data.integrationStatus == 'connected') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(['logId', 'ownerUid', 'actorUid', 'action', 'summary', 'createdAt']) &&
+        data.keys().hasOnly([
+          'logId', 'clientId', 'projectId', 'ownerUid', 'clientUid', 'clientEmail',
+          'actorUid', 'actorEmail', 'action', 'summary', 'createdAt'
+        ]) &&
+        isValidId(data.logId) &&
+        optStr(data, 'clientId', 128) &&
+        optStr(data, 'projectId', 128) &&
+        isValidId(data.ownerUid) &&
+        optStr(data, 'clientUid', 128) &&
+        optStr(data, 'clientEmail', 320) &&
+        isValidId(data.actorUid) &&
+        optStr(data, 'actorEmail', 320) &&
+        reqStr(data, 'action', 1, 80) &&
+        reqStr(data, 'summary', 1, 300) &&
+        data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isAdmin() || (isSignedIn() && request.auth.uid == userId));
+      allow list: if isBootstrapAdmin();
+      allow create: if isValidId(userId) && isSignedIn() && request.auth.uid == userId &&
+        isValidUser(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (incoming().role == 'client' || isAdmin());
+      allow update: if isValidId(userId) && isValidUser(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'role', 'clientId', 'updatedAt'])) ||
+          (isSignedIn() && request.auth.uid == userId && incoming().role == existing().role &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt']))
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isAdmin() || (isSignedIn() && request.auth.uid == adminId));
+      allow list: if isBootstrapAdmin();
+      allow create, update, delete: if isBootstrapAdmin();
+    }
+
+    match /clients/{clientId} {
+      allow get: if isValidId(clientId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(clientId) && isSignedIn() && isValidClient(incoming()) &&
+        incoming().clientId == clientId &&
+        incoming().ownerUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(clientId) && isValidClient(incoming()) &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'clientUid', 'clientEmail', 'name', 'company', 'industry', 'niche',
+              'targetAudience', 'brandGuidelines', 'brandColors', 'preferredFonts',
+              'referenceLinks', 'contentPreferences', 'socialAccounts', 'status', 'updatedAt'
+            ])) ||
+          (isAssignedClient(existing()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['contentPreferences', 'updatedAt']))
+        );
+      allow delete: if isValidId(clientId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /workspaces/{workspaceId} {
+      allow get: if isValidId(workspaceId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(workspaceId) && isSignedIn() && isValidWorkspace(incoming()) &&
+        incoming().workspaceId == workspaceId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(workspaceId) && isValidWorkspace(incoming()) &&
+        incoming().workspaceId == existing().workspaceId &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'clientUid', 'clientEmail', 'name', 'defaultAspectRatio', 'defaultResolution', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(workspaceId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /contentIdeas/{ideaId} {
+      allow get: if isValidId(ideaId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(ideaId) && isSignedIn() && isValidIdea(incoming()) &&
+        incoming().ideaId == ideaId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(ideaId) && isValidIdea(incoming()) &&
+        incoming().ideaId == existing().ideaId &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'hook', 'category', 'niche', 'tags', 'referenceLinks', 'notes',
+              'status', 'reviewNote', 'reviewedBy', 'updatedAt'
+            ])) ||
+          (isAssignedClient(existing()) &&
+            incoming().status in ['approved', 'rejected', 'changes_requested'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewNote', 'reviewedBy', 'updatedAt']))
+        );
+      allow delete: if isValidId(ideaId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /scripts/{scriptId} {
+      allow get: if isValidId(scriptId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(scriptId) && isSignedIn() && isValidScript(incoming()) &&
+        incoming().scriptId == scriptId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(scriptId) && isValidScript(incoming()) &&
+        incoming().scriptId == existing().scriptId &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'ideaId', 'title', 'hook', 'talkingPoints', 'cta', 'captionText',
+              'estimatedDurationS', 'status', 'reviewNote', 'reviewedBy', 'updatedAt'
+            ])) ||
+          (isAssignedClient(existing()) &&
+            incoming().status in ['approved', 'rejected', 'changes_requested'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'reviewNote', 'reviewedBy', 'updatedAt']))
+        );
+      allow delete: if isValidId(scriptId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /projects/{projectId} {
+      allow get: if isValidId(projectId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(projectId) && isSignedIn() && isValidProject(incoming()) &&
+        incoming().projectId == projectId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(projectId) && isValidProject(incoming()) &&
+        incoming().projectId == existing().projectId &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'clientUid', 'clientEmail', 'ideaId', 'scriptId', 'sourceAssetId',
+              'referenceAssetId', 'referenceMetrics', 'editingInstructions',
+              'targetAspectRatio', 'targetDurationS', 'captionPreferences', 'deadline',
+              'status', 'latestVersionNumber', 'latestJobId', 'approvedVersionNumber', 'updatedAt'
+            ])) ||
+          (isAssignedClient(existing()) &&
+            incoming().status in ['Final Approval', 'Revision Requested', 'Re-rendering', 'Awaiting Review', 'Failed'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'editingInstructions', 'latestVersionNumber', 'latestJobId', 'approvedVersionNumber', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(projectId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /assets/{assetId} {
+      allow get: if isValidId(assetId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(assetId) && isSignedIn() && isValidAsset(incoming()) &&
+        incoming().assetId == assetId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/projects/$(incoming().projectId)) &&
+        incoming().createdAt == request.time;
+      allow update: if isValidId(assetId) && isValidAsset(incoming()) &&
+        incoming().assetId == existing().assetId &&
+        incoming().projectId == existing().projectId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid)) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['available', 'expiresAt', 'referenceAnalysis']);
+      allow delete: if isValidId(assetId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /renderJobs/{jobId} {
+      allow get: if isValidId(jobId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(jobId) && isSignedIn() && isValidRenderJob(incoming()) &&
+        incoming().jobId == jobId &&
+        (incoming().ownerUid == request.auth.uid || isAdmin()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(jobId) && isValidRenderJob(incoming()) &&
+        incoming().jobId == existing().jobId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        canAccessRecord(existing()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'progress', 'error', 'durationS', 'updatedAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /videoVersions/{versionId} {
+      allow get: if isValidId(versionId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(versionId) && isSignedIn() && isValidVideoVersion(incoming()) &&
+        incoming().versionId == versionId &&
+        (incoming().ownerUid == request.auth.uid || isAssignedClient(incoming()) || isAdmin()) &&
+        exists(/databases/$(database)/documents/projects/$(incoming().projectId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(versionId) && isValidVideoVersion(incoming()) &&
+        incoming().versionId == existing().versionId &&
+        incoming().projectId == existing().projectId &&
+        incoming().clientId == existing().clientId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().versionNumber == existing().versionNumber &&
+        incoming().jobId == existing().jobId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (isSignedIn() && existing().ownerUid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['approvalStatus', 'outputAvailable', 'durationS', 'approvedBy', 'updatedAt'])) ||
+          (isAssignedClient(existing()) &&
+            incoming().approvalStatus in ['approved', 'rejected', 'revision_requested'] &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['approvalStatus', 'approvedBy', 'updatedAt']))
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /feedback/{feedbackId} {
+      allow get: if isValidId(feedbackId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(feedbackId) && isSignedIn() && isValidFeedback(incoming()) &&
+        incoming().feedbackId == feedbackId &&
+        incoming().authorUid == request.auth.uid &&
+        (incoming().ownerUid == request.auth.uid || isAssignedClient(incoming()) || isAdmin()) &&
+        exists(/databases/$(database)/documents/projects/$(incoming().projectId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(feedbackId) && isValidFeedback(incoming()) &&
+        incoming().feedbackId == existing().feedbackId &&
+        incoming().projectId == existing().projectId &&
+        incoming().versionId == existing().versionId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().authorUid == existing().authorUid &&
+        incoming().comment == existing().comment &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        canAccessRecord(existing()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['triggeredRevisionJobId', 'status', 'updatedAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /approvals/{approvalId} {
+      allow get: if isValidId(approvalId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(approvalId) && isSignedIn() && isValidApproval(incoming()) &&
+        incoming().approvalId == approvalId &&
+        incoming().decidedByUid == request.auth.uid &&
+        (incoming().ownerUid == request.auth.uid || isAssignedClient(incoming()) || isAdmin()) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /publishingRecords/{recordId} {
+      allow get: if isValidId(recordId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(recordId) && isSignedIn() && isValidPublishingRecord(incoming()) &&
+        incoming().recordId == recordId &&
+        incoming().ownerUid == request.auth.uid &&
+        exists(/databases/$(database)/documents/projects/$(incoming().projectId)) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(recordId) && isValidPublishingRecord(incoming()) &&
+        incoming().recordId == existing().recordId &&
+        incoming().projectId == existing().projectId &&
+        incoming().ownerUid == existing().ownerUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid)) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'versionId', 'versionNumber', 'title', 'platform', 'caption', 'hashtags',
+          'templateName', 'plannedDate', 'readiness', 'integrationStatus', 'updatedAt'
+        ]);
+      allow delete: if isValidId(recordId) && (isAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid));
+    }
+
+    match /activityLogs/{logId} {
+      allow get: if isValidId(logId) && canAccessRecord(existing());
+      allow list: if isSignedIn() && canListRecord(existing());
+      allow create: if isValidId(logId) && isSignedIn() && isValidActivityLog(incoming()) &&
+        incoming().logId == logId &&
+        incoming().actorUid == request.auth.uid &&
+        (incoming().ownerUid == request.auth.uid || isAssignedClient(incoming()) || isAdmin()) &&
+        incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

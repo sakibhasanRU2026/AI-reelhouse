@@ -1,0 +1,5 @@
+{
+  "name": "REELHOUSE Render Service",
+  "description": "Video rendering backend and studio UI powered by FFmpeg for cutting, reframing, shortening intros/outros, and burning captions into MP4 and MOV videos.",
+  "requestFramePermissions": []
+}
